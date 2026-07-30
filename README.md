@@ -5,7 +5,7 @@ A focused workshop for encrypting Kubernetes Secrets with
 [age](https://age-encryption.org/). It demonstrates multiple recipients, local
 encryption and decryption, and the way Flux obtains an age private identity.
 
-> **Workshop only:** The AGE private identities under `keys/` are intentionally
+> **Workshop only:** The AGE private identities under `age-private-key/` are intentionally
 > committed so every participant can decrypt the example. Never commit private
 > identities used to protect real secrets.
 
@@ -51,7 +51,7 @@ encrypted Git file
 .sops.yaml                    SOPS creation rule and AGE recipients
 k8s-secret.yaml               plaintext workshop Secret, ignored by Git
 k8s-secret.enc.yaml           encrypted Secret committed to Git
-keys/                         committed workshop-only AGE private identities
+age-private-key/              committed workshop-only AGE private identities
 scripts/generate-age-key.sh   print a new AGE key pair
 scripts/encrypt.sh            encrypt the example Secret
 scripts/decrypt.sh            print the decrypted Secret
@@ -62,17 +62,17 @@ scripts/decrypt.sh            print the decrypted Secret
 Generate and save two identities:
 
 ```bash
-mkdir -p keys
-chmod 700 keys
-(umask 077; ./scripts/generate-age-key.sh > keys/flux.agekey)
-(umask 077; ./scripts/generate-age-key.sh > keys/mtumilowicz.agekey)
+mkdir -p age-private-key
+chmod 700 age-private-key
+(umask 077; ./scripts/generate-age-key.sh > age-private-key/flux.agekey)
+(umask 077; ./scripts/generate-age-key.sh > age-private-key/mtumilowicz.agekey)
 ```
 
 Print their public recipients:
 
 ```bash
-age-keygen -y keys/flux.agekey
-age-keygen -y keys/mtumilowicz.agekey
+age-keygen -y age-private-key/flux.agekey
+age-keygen -y age-private-key/mtumilowicz.agekey
 ```
 
 An `age1...` value is a public recipient and belongs in `.sops.yaml`. An
@@ -136,7 +136,7 @@ Decrypt with the default Flux identity:
 Prove that the second identity can decrypt the same file:
 
 ```bash
-./scripts/decrypt.sh keys/mtumilowicz.agekey
+./scripts/decrypt.sh age-private-key/mtumilowicz.agekey
 ```
 
 Decryption prints YAML to standard output. Redirect it only when a plaintext
