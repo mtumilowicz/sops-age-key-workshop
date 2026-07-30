@@ -1,0 +1,4 @@
+# Workshop AGE identities under keys/ are intentionally committed.
+
+# Locally decrypted secret material.
+*.decrypted.yaml

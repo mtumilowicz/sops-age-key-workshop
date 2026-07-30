@@ -1,0 +1,10 @@
+keys:
+  flux_age_key: &flux_age_key age1deeq9quljsdstn4eqdd68uyu87vwajq7yljcsj3y96xvggvuxv2q35wq4w
+  mtumilowicz_age_key: &mtumilowicz_age_key age1an9w2y5s6ancclzsdlkt334ef97k2m80yw9p5fsz26zu6qw45uqq25t7dg
+
+creation_rules:
+  - path_regex: secret\.enc\.yaml
+    encrypted_regex: ^(data|stringData)
+    age:
+      - *flux_age_key
+      - *mtumilowicz_age_key
