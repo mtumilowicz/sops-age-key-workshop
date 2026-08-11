@@ -162,6 +162,26 @@ sops:
 
 ## SOPS policy
 
+* definition
+  * `.sops.yaml` is the repository's SOPS configuration file
+  * it defines rules for creating and updating SOPS-encrypted files
+  * it contains public recipients and selection rules
+  * it must not contain private identities or plaintext secrets
+* location
+  * this repository stores the file at `./.sops.yaml`
+* discovery
+  * SOPS starts searching in the current working directory
+  * it continues through each parent directory
+  * it uses the first `.sops.yaml` found
+  * it does not start the search from the encrypted file's directory
+  * `--config PATH` selects a configuration file explicitly
+  * the workshop scripts that run SOPS change to the repository root first
+* purpose
+  * `path_regex` selects files
+  * `encrypted_regex` selects YAML fields
+  * `age` defines which recipients may decrypt
+  * SOPS uses the first matching `creation_rule`
+
 Current [`.sops.yaml`](./.sops.yaml):
 
 ```yaml
