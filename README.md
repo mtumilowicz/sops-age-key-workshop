@@ -114,13 +114,41 @@ sops:
     identity
 * multiple recipients
   * recipients in one `age` list have OR semantics
+    * example: two-recipient list is therefore 1-of-2 access
+        ```
+        ```
   * any matching identity can decrypt the complete document
-  * N-of-M access requires `key_groups` and `shamir_threshold`
+  * N-of-M access requires `key_groups` and `shamir_threshold`, for example:
+    * example
+        ```yaml
+        key_groups:
+          - age:
+              - age1-alice
+          - age:
+              - age1-flux
+          - age:
+              - age1-recovery
+        shamir_threshold: 2
+        ```
+      
+        * SOPS splits the data key into three shares
+        * shares from any two groups are required
+        * valid combinations are Alice and Flux, Alice and Recovery, or Flux and
+          Recovery
+        * the threshold counts groups, not individual identities
+        * when one group contains several identities, any one of them can recover
+          that group's share
 * integrity
   * the encrypted MAC covers encrypted and plaintext data values by default
   * changing plaintext such as `metadata.name` causes a MAC mismatch
   * the MAC proves integrity, not authorship
-  * Git review and signatures provide attribution
+    * anyone with a matching age identity can change the file and create a new
+      valid MAC
+  * signed commits or tags provide cryptographic attribution
+    * verify that the Git object was signed by the holder of a trusted signing
+      key
+    * detect changes made to that object after signing
+    * do not prove that the signed change is correct or safe
 * protection boundary
   * SOPS protects data stored in Git
   * plaintext still exists in editors, process memory, pipes, deployment APIs,
