@@ -205,13 +205,46 @@ creation_rules:
   * leaves `apiVersion`, `kind`, `metadata`, and `type` readable
 * `age`
   * wraps one data key for the Flux and developer recipients
+    * here, “wraps” means
+      * SOPS generates one data key for `k8s-secret.enc.yaml`
+      * age encrypts one copy of that data key with the Flux public recipient
+      * age encrypts another copy of the same data key with the developer public
+        recipient
+      * SOPS stores both encrypted copies in `k8s-secret.enc.yaml`:
+    
+        ```yaml
+        sops:
+          age:
+            - recipient: age1-flux
+              enc: <data key encrypted for Flux>
+            - recipient: age1-developer
+              enc: <same data key encrypted for the developer>
+        ```
 * top-level `keys`
   * holds YAML anchors
   * creates no access or threshold semantics
 * creation rules
   * are evaluated in order; the first match wins
-  * apply when a file is created
-  * do not automatically update existing encrypted files
+    * example: `k8s-secret.enc.yaml` matches both rules below, but SOPS uses only
+      the first rule
+
+      ```yaml
+      creation_rules:
+        - path_regex: '^k8s-'
+          age:
+            - age1-first
+        - path_regex: 'secret'
+          age:
+            - age1-second
+      ```
+
+  * apply when `sops encrypt` creates a new encrypted file
+  * the selected rule's recipients and field-selection setting are recorded in
+    the new file's `sops` metadata; `path_regex` is not recorded
+  * changing `.sops.yaml` later does not rewrite that existing file
+    * `updatekeys` explicitly applies recipient changes
+    * decrypting and creating the encrypted file again explicitly applies a new
+      field-selection setting
 
 Use complete matches in production:
 
@@ -224,18 +257,81 @@ creation_rules:
       - age1...
 ```
 
+* complete match
+  * `^` requires the match to start at the beginning
+  * `$` requires the match to end at the end
+* path example
+  * `secret\.enc\.yaml` matches both `k8s-secret.enc.yaml` and
+    `backup-k8s-secret.enc.yaml.tmp`
+  * `^k8s-secret\.enc\.yaml$` matches only `k8s-secret.enc.yaml`
+* YAML-key example
+  * `^(data|stringData)` matches `data`, `database`, `stringData`, and
+    `stringDatabase`
+  * `^(data|stringData)$` matches only `data` and `stringData`
+
 Existing files retain their recipients and encryption settings in `sops`
 metadata:
 
+```yaml
+# Stored inside k8s-secret.enc.yaml
+sops:
+  age:
+    - recipient: age1-flux
+      enc: <encrypted data-key copy>
+    - recipient: age1-developer
+      enc: <encrypted data-key copy>
+  encrypted_regex: ^(data|stringData)
+```
+
+* this embedded metadata records the recipients and field-selection setting
+  actually used for `k8s-secret.enc.yaml`
+* `sops decrypt` and `sops edit` read this metadata from the encrypted file
+* editing `.sops.yaml` alone does not change this embedded metadata
 * `sops updatekeys`
-  * synchronizes recipient wrappers with `.sops.yaml`
+  * reads the recipients from the first matching rule in `.sops.yaml`
+  * makes the `sops.age` recipient entries in the encrypted file equal to that
+    list
+  * example: after removing the developer from `.sops.yaml`
+
+    ```yaml
+    # Before updatekeys: stored in k8s-secret.enc.yaml
+    sops:
+      age:
+        - recipient: age1-flux
+          enc: <encrypted data-key copy>
+        - recipient: age1-developer
+          enc: <encrypted data-key copy>
+
+    # After updatekeys: stored in k8s-secret.enc.yaml
+    sops:
+      age:
+        - recipient: age1-flux
+          enc: <encrypted data-key copy>
+    ```
+
+  * requires an existing authorized private identity to recover the data key
   * retains the current data key
+  * does not change which YAML fields are encrypted
 * `sops rotate`
   * creates a new data key
   * re-encrypts protected values
 * changing `encrypted_regex`
-  * requires re-encryption
-  * is not handled by `updatekeys`
+  * changing it in `.sops.yaml` affects new encryption operations
+  * example:
+
+    ```yaml
+    # Changed policy in .sops.yaml
+    encrypted_regex: '^stringData$'
+
+    # Existing k8s-secret.enc.yaml remains unchanged
+    sops:
+      encrypted_regex: ^(data|stringData)
+    ```
+
+  * `updatekeys` changes recipients, not field selection
+  * `rotate` replaces the data key but keeps the file's field selection
+  * applying the new regex requires decrypting and creating the encrypted file
+    again
 
 ### Recipient-change security
 
