@@ -237,6 +237,31 @@ metadata:
   * requires re-encryption
   * is not handled by `updatekeys`
 
+### Recipient-change security
+
+* adding an attacker's public recipient to `.sops.yaml` does not grant access to
+  an existing encrypted file
+  * the file retains its original recipients in `sops.age`
+  * `.sops.yaml` does not contain the file's data key
+* granting the new recipient access requires `sops updatekeys`
+  * SOPS must first use an authorized private identity to recover the existing
+    data key
+  * SOPS then encrypts a new copy of that data key for the new recipient
+  * without an authorized identity, an attacker cannot create a valid encrypted
+    copy of the existing data key
+* replacing the complete encrypted file does not reveal its original plaintext
+  * it can still replace deployed content if the malicious change is accepted
+* an attacker succeeds by compromising
+  * an authorized private identity
+  * CI that holds an identity and processes untrusted recipient changes
+  * the repository review or approval process
+* controls
+  * require review for `.sops.yaml` and encrypted files
+  * do not expose private identities to untrusted CI jobs
+  * do not run `updatekeys` for untrusted changes
+  * validate recipients against an allowlist
+  * protect deployment branches and pipelines
+
 ## Local operations
 
 Requirements: Bash, `sops`, and an editor for `sops edit`.
