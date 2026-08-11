@@ -397,50 +397,82 @@ sops:
 
 ## Flux with SOPS and age
 
-* repository author
-  * adds the Flux public age recipient (`age1...`) to the SOPS policy
-  * uses SOPS to encrypt the Kubernetes Secret before committing it
-  * commits ciphertext, public recipients, and SOPS metadata
-  * does not commit the Flux private age identity
-* cluster operator
-  * provides Flux with the private age identity matching the public recipient
-  * delivers it independently of the encrypted Git repository
-  * normally stores it in a Kubernetes Secret in the same namespace as the Flux
-    `Kustomization`
-  * stores it under a Kubernetes Secret entry name ending in `.agekey`, such as
-    `identity.agekey`
-* Flux `Kustomization`
-  * enables SOPS decryption
-  * identifies the Kubernetes Secret containing the private age identity
+* use case
+  * an invoicing backend calls the Stripe API
+  * the application requires a server-side Stripe API key
+* plaintext Kubernetes Secret
+  * the application reads the Stripe key from a Secret in its namespace
+  * example
 
     ```yaml
-    spec:
-      decryption:
-        provider: sops
-        secretRef:
-          name: sops-age
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: invoicing-stripe
+      namespace: invoicing
+    stringData:
+      STRIPE_API_KEY: rk_live_example
     ```
 
-* reconciliation flow
-  1. Flux fetches the repository artifact containing the encrypted manifest.
-  2. Flux reads the recipients and encrypted data-key copies from the file's
-     `sops.age` metadata.
-  3. age uses the matching private identity from `sops-age` to decrypt the data
-     key.
-  4. SOPS uses the data key to verify the MAC and decrypt the selected YAML
-     values.
-  5. Flux runs the Kustomize build, validates the result, and applies the
-     plaintext Kubernetes objects.
-* `.sops.yaml`
-  * is used by authors when encrypting files and changing recipients
-  * is not required by Flux to decrypt an existing file
-  * the existing file already contains its recipients and encryption settings
-    in `sops` metadata
-* security boundary
-  * the private identity cannot be bootstrapped only from a manifest encrypted
-    with that identity
-  * an operator or secret manager must provide it out of band
-  * plaintext exists in the Flux controller and Kubernetes after decryption
+* encrypted Git state
+  * the Stripe key must not be committed as plaintext
+  * SOPS encrypts the value before the file enters Git
+  * the file includes production Flux and recovery public age recipients
+  * example
+
+    ```yaml
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: invoicing-stripe
+      namespace: invoicing
+    stringData:
+      STRIPE_API_KEY: ENC[AES256_GCM,...]
+    sops:
+      age:
+        - recipient: age1-prod-invoicing-flux...
+          enc: <data key encrypted for production Flux>
+        - recipient: age1-prod-invoicing-recovery...
+          enc: <same data key encrypted for recovery>
+    ```
+
+* production recipient design
+  * production Flux identity
+    * private identity is stored in the production cluster
+    * provides automatic decryption during reconciliation
+    * is scoped to the production invoicing workload or tenant
+  * recovery identity
+    * private identity is stored offline or in a separate secret manager
+    * is not stored in Git or in the same production cluster
+    * recovers secrets if the Flux identity is lost
+  * recipients use OR semantics
+    * either private identity can decrypt the complete file
+    * additional recipients improve recoverability but increase exposure
+  * do not add routine developer identities unless developers require plaintext
+    access
+* Flux credentials
+  * `git-auth`
+    * authenticates Flux to the private Git repository
+    * is referenced by the Flux `GitRepository`
+  * `sops-age`
+    * contains the private age identity matching
+      `age1-prod-invoicing-flux...`
+    * is referenced by the Flux `Kustomization`
+    * allows age to recover the SOPS data key
+* deployment flow
+  * Flux fetches the private Git repository using `git-auth`
+  * age uses the production Flux identity in `sops-age` to recover the SOPS data
+    key
+  * SOPS uses the data key to verify the MAC and decrypt `STRIPE_API_KEY`
+  * Flux creates the `invoicing-stripe` Kubernetes Secret in the `invoicing`
+    namespace
+  * the invoicing application reads the Stripe key from the Kubernetes Secret
+  * the application uses the key when calling Stripe
+* `HelmRelease` responsibility
+  * deploys the invoicing application
+  * does not contain the Stripe key
+  * does not decrypt SOPS
+  * the Kubernetes Secret is created before the application uses it
 
 ## workshop plan
 
