@@ -97,8 +97,6 @@ sops:
   mac: ENC[AES256_GCM,data:W6JZXuZzS1vrtqBA,...]
 ```
 
-* `stringData.password`
-  * is encrypted by SOPS with the data key
 * `sops.age[].enc`
   * each `enc` block is one encrypted copy of the same data key
   * each copy is encrypted with the public key in its `recipient`
