@@ -115,8 +115,13 @@ sops:
 * multiple recipients
   * recipients in one `age` list have OR semantics
     * example: two-recipient list is therefore 1-of-2 access
+        ```yaml
+        age:
+          - age1-alice
+          - age1-flux
         ```
-        ```
+        * Alice can decrypt without Flux
+        * Flux can decrypt without Alice
   * any matching identity can decrypt the complete document
   * N-of-M access requires `key_groups` and `shamir_threshold`, for example:
     * example
