@@ -44,8 +44,21 @@
       `stringData`
     * values below `metadata` are not selected
   * age encrypts the data key with each recipient's public key (`age1...`)
-  * the file stores the encrypted YAML values and one encrypted copy of the data
-    key for each recipient
+  * the file stores
+    * encrypted YAML values in their original fields, such as
+      `stringData.password`
+    * one encrypted copy of the data key for each recipient in a separate
+      `sops.age[].enc` block, for example:
+
+      ```yaml
+      sops:
+        age:
+          - recipient: age1deeq9...
+            enc: |
+              -----BEGIN AGE ENCRYPTED FILE-----
+              YWdlLWVuY3J5cHRpb24ub3JnL3Yx...
+              -----END AGE ENCRYPTED FILE-----
+      ```
 * decryption
   * age needs a matching private identity (`AGE-SECRET-KEY-...`)
   * age uses the private identity to decrypt the data key
