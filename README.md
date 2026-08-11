@@ -34,6 +34,73 @@
     * starts with `AGE-SECRET-KEY-`
     * grants decryption access
     * must normally remain outside Git
+* how SOPS and age work together
+  * SOPS generates one random symmetric data key
+    * symmetric means the same key encrypts and decrypts data
+  * SOPS uses the data key to encrypt the selected YAML values
+    * SOPS reads `encrypted_regex` from the matching rule in `.sops.yaml`
+    * this workshop uses `^(data|stringData)`
+    * SOPS therefore encrypts values below keys beginning with `data` or
+      `stringData`
+    * values below `metadata` are not selected
+  * age encrypts the data key with each recipient's public key (`age1...`)
+  * the file stores the encrypted YAML values and one encrypted copy of the data
+    key for each recipient
+* decryption
+  * age needs a matching private identity (`AGE-SECRET-KEY-...`)
+  * age uses the private identity to decrypt the data key
+  * SOPS uses the recovered data key to decrypt the YAML values
+
+Example before encryption:
+
+```yaml
+metadata:
+  name: example-application # not selected
+stringData:                 # matches encrypted_regex
+  username: demo-user       # selected
+  password: demo-value      # selected
+```
+
+Abbreviated result from `k8s-secret.enc.yaml`:
+
+```yaml
+metadata:
+  name: example-application
+stringData:
+  password: ENC[AES256_GCM,data:XtOo6CeeOqr1gw==,...]
+sops:
+  age:
+    - recipient: age1deeq9...
+      enc: |
+        -----BEGIN AGE ENCRYPTED FILE-----
+        YWdlLWVuY3J5cHRpb24ub3JnL3Yx...
+        -----END AGE ENCRYPTED FILE-----
+    - recipient: age1an9w...
+      enc: |
+        -----BEGIN AGE ENCRYPTED FILE-----
+        YWdlLWVuY3J5cHRpb24ub3JnL3Yx...
+        -----END AGE ENCRYPTED FILE-----
+  encrypted_regex: ^(data|stringData)
+  mac: ENC[AES256_GCM,data:W6JZXuZzS1vrtqBA,...]
+```
+
+* `stringData.password`
+  * is encrypted by SOPS with the data key
+* `sops.age[].enc`
+  * each `enc` block is one encrypted copy of the same data key
+  * each copy is encrypted with the public key in its `recipient`
+  * can be decrypted only with the matching private identity
+  * does not contain the YAML values
+  * the copies differ because they use different recipients and encryption
+    randomness
+* `sops.mac`
+  * is an integrity check calculated from the document values
+  * is encrypted with the data key
+  * is recalculated during decryption and compared with the stored value
+  * reports a MAC mismatch when a value was changed, added, or removed without
+    valid re-encryption
+  * can be replaced with a valid new MAC by anyone who has a matching private
+    identity
 * multiple recipients
   * recipients in one `age` list have OR semantics
   * any matching identity can decrypt the complete document
