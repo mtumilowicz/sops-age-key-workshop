@@ -27,13 +27,16 @@
     source document
 * age
   * encrypts the SOPS data key for each configured recipient
-  * public recipient
-    * starts with `age1`
-    * may be committed and distributed
-  * private identity
-    * starts with `AGE-SECRET-KEY-`
-    * grants decryption access
-    * must normally remain outside Git
+  * terminology
+    * recipient
+      * public key beginning with `age1...`
+      * used to encrypt the SOPS data key
+      * may be committed and distributed
+    * identity
+      * private key beginning with `AGE-SECRET-KEY-...`
+      * matches one recipient
+      * used to decrypt the SOPS data key
+      * must normally remain outside Git
 * how SOPS and age work together
   * SOPS generates one random symmetric data key
     * symmetric means the same key encrypts and decrypts data
