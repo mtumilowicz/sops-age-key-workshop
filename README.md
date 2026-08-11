@@ -462,6 +462,7 @@ age-keygen --version
     ```
 
 * detect tampering
+  * the commands modify a disposable copy, not the repository file
 
     ```bash
     cp k8s-secret.enc.yaml /tmp/tampered-secret.enc.yaml
@@ -471,8 +472,16 @@ age-keygen --version
     sops decrypt /tmp/tampered-secret.enc.yaml
     ```
 
+  * `cp` creates `/tmp/tampered-secret.enc.yaml`; the original encrypted file
+    remains unchanged
+  * `sed -i.bak` modifies that copy without using SOPS
+    * replaces `metadata.name: example-application` with
+      `metadata.name: tampered-application`
+    * creates the backup `/tmp/tampered-secret.enc.yaml.bak`
+  * `sops decrypt` recalculates the MAC from the modified document values
+  * the changed plaintext `metadata.name` does not match the stored MAC
   * expected result: `MAC mismatch`
-  * discard the copy
+  * discard the copy and its `.bak` backup
   * never use `--ignore-mac` as a repair mechanism
 
 Avoid `sops decrypt --in-place`; it writes plaintext to disk.
@@ -590,13 +599,3 @@ manifest. It omits the workshop plaintext and private identity fixtures.
 
 Flux decrypts source manifests before the Kustomize build. The bootstrap
 identity cannot depend on a manifest encrypted with itself.
-
-## Production rules
-
-* commit encrypted files, public recipients, and policy only
-* separate recipients by environment, cluster, and trust boundary
-* keep private identities in a secret manager or protected local storage
-* prevent plaintext from entering arguments, logs, CI artifacts, editor swap,
-  and Git history
-* use Kubernetes RBAC and encryption at rest; SOPS does not protect runtime
-  copies
