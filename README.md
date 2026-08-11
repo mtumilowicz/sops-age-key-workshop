@@ -1,12 +1,5 @@
 # SOPS and age key workshop
 
-Technical workshop for encrypting Kubernetes Secrets in Git with
-[SOPS](https://getsops.io/) and [age](https://age-encryption.org/).
-
-> **Lab only:** this repository intentionally contains a plaintext Secret and
-> two private age identities. They protect no real data. Never commit plaintext
-> secrets or production private identities.
-
 ## References
 
 * [SOPS documentation](https://getsops.io/docs/)
@@ -16,92 +9,106 @@ Technical workshop for encrypting Kubernetes Secrets in Git with
 * [Flux SOPS guide](https://fluxcd.io/flux/guides/mozilla-sops/)
 * [Kubernetes Secrets](https://kubernetes.io/docs/concepts/configuration/secret/)
 
-## Purpose
+## Workshop warning
 
-The exercises demonstrate how to:
+* this repository intentionally commits
+  * dummy plaintext in `k8s-secret.yaml`
+  * disposable private identities in `age-private-key/`
+* the committed identities provide no confidentiality
+* production Git must contain neither plaintext secrets nor private identities
 
-* encrypt selected values while keeping a Kubernetes manifest readable
-* decrypt and edit a SOPS file with an age identity
-* grant and revoke access through multiple recipients
-* rotate the SOPS data key after access changes
-* let Flux decrypt manifests before applying them to Kubernetes
+## SOPS and age
 
-## Core concepts
+* SOPS
+  * encrypts selected values while preserving the document structure
+  * generates a random 256-bit data key
+  * encrypts selected leaves with AES-256-GCM
+  * stores ciphertext, wrapped data keys, an encrypted MAC, and metadata in the
+    source document
+* age
+  * encrypts the SOPS data key for each configured recipient
+  * public recipient
+    * starts with `age1`
+    * may be committed and distributed
+  * private identity
+    * starts with `AGE-SECRET-KEY-`
+    * grants decryption access
+    * must normally remain outside Git
+* multiple recipients
+  * recipients in one `age` list have OR semantics
+  * any matching identity can decrypt the complete document
+  * N-of-M access requires `key_groups` and `shamir_threshold`
+* integrity
+  * the encrypted MAC covers encrypted and plaintext data values by default
+  * changing plaintext such as `metadata.name` causes a MAC mismatch
+  * the MAC proves integrity, not authorship
+  * Git review and signatures provide attribution
+* protection boundary
+  * SOPS protects data stored in Git
+  * plaintext still exists in editors, process memory, pipes, deployment APIs,
+    and target systems
+  * Kubernetes Secret values use base64 encoding, not encryption
 
-### SOPS encryption
+## SOPS policy
 
-SOPS generates a random data key and uses it to encrypt selected values with
-AES-256-GCM. It then encrypts that data key for every configured age recipient.
-The encrypted values, wrapped data keys, integrity MAC, and encryption metadata
-are stored together in the YAML document.
-
-This keeps the document structure readable. In this workshop, fields such as
-`apiVersion`, `kind`, `metadata`, and `type` remain plaintext while values below
-`data` and `stringData` are encrypted.
-
-The encrypted MAC detects changes to the parsed document, including plaintext
-values. For example, manually changing `metadata.name` causes decryption to fail
-with a MAC mismatch.
-
-### age identities and recipients
-
-An age key pair has two parts:
-
-* a public recipient beginning with `age1`; it may be committed and shared
-* a private identity beginning with `AGE-SECRET-KEY-`; it grants decryption
-  access and must normally remain outside Git
-
-When a file has several recipients, each matching identity can decrypt the
-complete file. This is OR access, not an N-of-M threshold.
-
-### Protection boundary
-
-SOPS protects secrets stored in Git. Plaintext still exists when it is
-decrypted in an editor, process, pipe, Kubernetes API, or target cluster.
-
-Kubernetes Secret values are base64 encoded, not encrypted. SOPS encryption and
-Kubernetes runtime protections solve different problems.
-
-## Configuration
-
-[`.sops.yaml`](./.sops.yaml) defines the creation policy:
+Current [`.sops.yaml`](./.sops.yaml):
 
 ```yaml
 keys:
   flux_age_key: &flux_age_key age1...
-  developer_age_key: &developer_age_key age1...
+  mtumilowicz_age_key: &mtumilowicz_age_key age1...
 
 creation_rules:
   - path_regex: secret\.enc\.yaml
     encrypted_regex: ^(data|stringData)
     age:
       - *flux_age_key
-      - *developer_age_key
+      - *mtumilowicz_age_key
 ```
 
-The rule:
+* `path_regex: secret\.enc\.yaml`
+  * matches relative paths containing `secret.enc.yaml`
+  * therefore matches `k8s-secret.enc.yaml`
+* `encrypted_regex: ^(data|stringData)`
+  * encrypts descendants of keys beginning with `data` or `stringData`
+  * leaves `apiVersion`, `kind`, `metadata`, and `type` readable
+* `age`
+  * wraps one data key for the Flux and developer recipients
+* top-level `keys`
+  * holds YAML anchors
+  * creates no access or threshold semantics
+* creation rules
+  * are evaluated in order; the first match wins
+  * apply when a file is created
+  * do not automatically update existing encrypted files
 
-* matches `k8s-secret.enc.yaml`
-* encrypts descendants of keys beginning with `data` or `stringData`
-* wraps one data key for both age recipients
+Use complete matches in production:
 
-The top-level `keys` mapping only holds YAML anchors. It does not create access
-rules. SOPS uses the first matching creation rule.
+```yaml
+creation_rules:
+  - path_regex: '^k8s-secret\.enc\.yaml$'
+    encrypted_regex: '^(data|stringData)$'
+    age:
+      - age1...
+      - age1...
+```
 
-Creation rules apply when a file is encrypted. Existing encrypted files retain
-their recipients and settings in their `sops` metadata:
+Existing files retain their recipients and encryption settings in `sops`
+metadata:
 
-* `sops updatekeys` synchronizes recipients with `.sops.yaml`
-* `sops rotate` creates a new data key and re-encrypts protected values
+* `sops updatekeys`
+  * synchronizes recipient wrappers with `.sops.yaml`
+  * retains the current data key
+* `sops rotate`
+  * creates a new data key
+  * re-encrypts protected values
+* changing `encrypted_regex`
+  * requires re-encryption
+  * is not handled by `updatekeys`
 
-For production, anchor regular expressions to the intended complete path and
-field names.
+## Local operations
 
-## Exercise 1: Encrypt and decrypt a Secret
-
-Requirements: Bash, `sops`, and `age-keygen`.
-
-On macOS:
+Requirements: Bash, `sops`, and an editor for `sops edit`.
 
 ```bash
 brew install sops age
@@ -109,197 +116,198 @@ sops --version
 age-keygen --version
 ```
 
-The input is [`k8s-secret.yaml`](./k8s-secret.yaml). It contains dummy plaintext
-for the workshop. The encryption script writes
-[`k8s-secret.enc.yaml`](./k8s-secret.enc.yaml):
+* encrypt the dummy manifest
+  * `scripts/encrypt.sh` reads `k8s-secret.yaml`
+  * it overwrites `k8s-secret.enc.yaml`
+  * its shell redirection is not atomic; an encryption failure can leave the
+    output empty
+  * always verify the result
 
-```bash
-./scripts/encrypt.sh
-sops filestatus k8s-secret.enc.yaml
-```
+    ```bash
+    ./scripts/encrypt.sh
+    sops filestatus k8s-secret.enc.yaml
+    ./scripts/decrypt.sh
+    git diff -- k8s-secret.enc.yaml
+    ```
 
-Inspect the encrypted file. Its Kubernetes structure and public recipients are
-visible, but values below `stringData` are encrypted.
+* decrypt with the default Flux fixture identity
 
-Decrypt it with the default Flux fixture identity:
+    ```bash
+    ./scripts/decrypt.sh
+    ```
 
-```bash
-./scripts/decrypt.sh
-```
+* decrypt with the developer fixture identity
 
-Decrypt it with the developer fixture identity:
+    ```bash
+    ./scripts/decrypt.sh age-private-key/mtumilowicz.agekey
+    ```
 
-```bash
-./scripts/decrypt.sh age-private-key/mtumilowicz.agekey
-```
+* use SOPS directly
+  * the workshop sets `SOPS_AGE_KEY_FILE` explicitly
 
-Both commands produce the same plaintext because either recipient can unwrap
-the data key.
+    ```bash
+    export SOPS_AGE_KEY_FILE="$PWD/age-private-key/flux.agekey"
+    sops decrypt k8s-secret.enc.yaml
+    ```
 
-SOPS also reads age identities from `SOPS_AGE_KEY_FILE`. Set it explicitly when
-using SOPS commands directly:
+* edit through SOPS
+  * SOPS decrypts the document for the editor
+  * saving re-encrypts protected values and recalculates the MAC
 
-```bash
-export SOPS_AGE_KEY_FILE="$PWD/age-private-key/flux.agekey"
-sops decrypt k8s-secret.enc.yaml
-```
+    ```bash
+    sops edit k8s-secret.enc.yaml
+    ```
 
-## Exercise 2: Edit encrypted values
+* update one encrypted value
+  * pipe real values from a secure source
+  * do not place them in arguments or shell history
 
-Use an editor through SOPS:
+    ```bash
+    printf '%s' '"rotated-demo-value"' |
+      sops set --value-stdin k8s-secret.enc.yaml \
+      '["stringData"]["password"]'
 
-```bash
-sops edit k8s-secret.enc.yaml
-```
+    sops decrypt --extract \
+      '["stringData"]["password"]' \
+      k8s-secret.enc.yaml
+    ```
 
-SOPS decrypts the document for the editor. On save, it encrypts protected
-values again and recalculates the MAC.
+* detect tampering
 
-To update one value without opening an editor:
+    ```bash
+    cp k8s-secret.enc.yaml /tmp/tampered-secret.enc.yaml
+    sed -i.bak \
+      's/name: example-application/name: tampered-application/' \
+      /tmp/tampered-secret.enc.yaml
+    sops decrypt /tmp/tampered-secret.enc.yaml
+    ```
 
-```bash
-printf '%s' '"rotated-demo-value"' |
-  sops set --value-stdin k8s-secret.enc.yaml \
-  '["stringData"]["password"]'
-```
+  * expected result: `MAC mismatch`
+  * discard the copy
+  * never use `--ignore-mac` as a repair mechanism
 
-Verify the result without writing a plaintext file:
+Avoid `sops decrypt --in-place`; it writes plaintext to disk.
 
-```bash
-sops decrypt --extract \
-  '["stringData"]["password"]' \
-  k8s-secret.enc.yaml
+## Recipient lifecycle
 
-git diff -- k8s-secret.enc.yaml
-```
+* generate an identity
+  * requires `age-keygen`
+  * redirect stdout to protected storage because it contains the private
+    identity
+  * the public recipient is printed to stderr
 
-Pass real values through a secure input source. Do not place them in command
-arguments or shell history.
+    ```bash
+    ./scripts/generate-age-key.sh > /protected/path/developer.agekey
+    ```
 
-## Exercise 3: Detect tampering
+  * add only the resulting `age1...` recipient to `.sops.yaml`
+  * run `updatekeys` with an existing identity
+* remove an identity
+  * perform these commands only on a disposable branch
+  * remove `*mtumilowicz_age_key` from `creation_rules[0].age`
+  * synchronize the recipient wrappers
 
-Create a disposable copy and change a plaintext field without using SOPS:
+    ```bash
+    SOPS_AGE_KEY_FILE=age-private-key/flux.agekey \
+      sops updatekeys --yes k8s-secret.enc.yaml
+    ```
 
-```bash
-cp k8s-secret.enc.yaml /tmp/tampered-secret.enc.yaml
-sed -i.bak \
-  's/name: example-application/name: tampered-application/' \
-  /tmp/tampered-secret.enc.yaml
-sops decrypt /tmp/tampered-secret.enc.yaml
-```
+  * verify access
 
-Expected result: decryption fails with a MAC mismatch. Do not use
-`--ignore-mac` as a repair mechanism.
+    ```bash
+    ./scripts/decrypt.sh age-private-key/mtumilowicz.agekey
+    ./scripts/decrypt.sh age-private-key/flux.agekey
+    ```
 
-The MAC proves document integrity. It does not prove who changed the document.
-Use Git review and signing when authorship matters.
+  * the removed identity must fail
+  * the remaining identity must succeed
+  * replace the data key after access removal
 
-## Exercise 4: Revoke a recipient
+    ```bash
+    SOPS_AGE_KEY_FILE=age-private-key/flux.agekey \
+      sops rotate --in-place k8s-secret.enc.yaml
+    ```
 
-Perform this exercise only on a disposable branch.
+* revocation limits
+  * recipient removal does not erase old Git revisions
+  * rotation does not retract copied plaintext
+  * after compromise, also rotate the underlying password, token, or
+    certificate
 
-First, remove `*mtumilowicz_age_key` from `creation_rules[0].age` in
-`.sops.yaml`. Then synchronize the encrypted file with the remaining recipient:
-
-```bash
-SOPS_AGE_KEY_FILE=age-private-key/flux.agekey \
-  sops updatekeys --yes k8s-secret.enc.yaml
-```
-
-Confirm that the removed identity fails and the remaining identity succeeds:
-
-```bash
-./scripts/decrypt.sh age-private-key/mtumilowicz.agekey
-./scripts/decrypt.sh age-private-key/flux.agekey
-```
-
-Replace the data key after removing access:
-
-```bash
-SOPS_AGE_KEY_FILE=age-private-key/flux.agekey \
-  sops rotate --in-place k8s-secret.enc.yaml
-```
-
-`updatekeys` changes the wrapped recipient copies of the existing data key.
-`rotate` replaces that data key. Neither operation revokes plaintext or keys
-already copied from Git history.
-
-To grant access, generate an identity outside Git, add only its `age1...`
-recipient to `.sops.yaml`, and run `updatekeys` with an existing identity:
-
-```bash
-./scripts/generate-age-key.sh
-```
-
-The script prints the private identity to stdout and its public recipient to
-stderr. Redirect the identity only to protected storage.
-
-## Exercise 5: Deploy with Flux
+## Flux decryption
 
 Requirements:
 
+* `kubectl`
 * Flux controllers and CLI
-* an authenticated Git remote
+* an authenticated, pushable Git remote
 * an existing Flux `GitRepository` source for this repository
 
-Production Git must contain only the encrypted manifest, public recipients, and
-SOPS policy. It must not contain this workshop's plaintext manifest or private
-identities.
+Production Git contains the SOPS policy, public recipients, and encrypted
+manifest. It omits the workshop plaintext and private identity fixtures.
 
-Create a root `kustomization.yaml` that selects only the encrypted manifest:
+* select only the encrypted manifest in a root `kustomization.yaml`
 
-```yaml
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - k8s-secret.enc.yaml
-```
+    ```yaml
+    apiVersion: kustomize.config.k8s.io/v1beta1
+    kind: Kustomization
+    resources:
+      - k8s-secret.enc.yaml
+    ```
 
-Inject the Flux age identity into the cluster. The source file below is a
-committed fixture and is suitable only for this lab:
+* commit and push the source files
 
-```bash
-export FLUX_NAMESPACE=flux-system
-export FLUX_SOURCE=sops-age-workshop
-export FLUX_KUSTOMIZATION=sops-age-workshop
+    ```bash
+    git add .sops.yaml k8s-secret.enc.yaml kustomization.yaml
+    git commit -m "add SOPS-encrypted application secret"
+    git push
+    ```
 
-kubectl -n "$FLUX_NAMESPACE" create secret generic sops-age \
-  --from-file=identity.agekey=age-private-key/flux.agekey \
-  --dry-run=client -o yaml |
-  kubectl apply -f -
-```
+* inject the age identity independently
+  * the committed source below is suitable only for this lab
+  * production identities come from an operator or secret manager
 
-Create or update the Flux `Kustomization`:
+    ```bash
+    export FLUX_NAMESPACE=flux-system
+    export FLUX_SOURCE=sops-age-workshop
+    export FLUX_KUSTOMIZATION=sops-age-workshop
 
-```bash
-flux create kustomization "$FLUX_KUSTOMIZATION" \
-  --namespace="$FLUX_NAMESPACE" \
-  --source="GitRepository/$FLUX_SOURCE" \
-  --path="./" \
-  --prune=true \
-  --interval=1m \
-  --decryption-provider=sops \
-  --decryption-secret=sops-age \
-  --export |
-  kubectl apply -f -
+    kubectl -n "$FLUX_NAMESPACE" create secret generic sops-age \
+      --from-file=identity.agekey=age-private-key/flux.agekey \
+      --dry-run=client -o yaml |
+      kubectl apply -f -
+    ```
 
-flux reconcile kustomization "$FLUX_KUSTOMIZATION" \
-  --namespace="$FLUX_NAMESPACE" \
-  --with-source
-```
+* create or update the Flux `Kustomization`
 
-Flux decrypts source manifests before the Kustomize build and applies the
-result. The decryption identity must be injected independently; it cannot be
-bootstrapped from a manifest encrypted with itself.
+    ```bash
+    flux create kustomization "$FLUX_KUSTOMIZATION" \
+      --namespace="$FLUX_NAMESPACE" \
+      --source="GitRepository/$FLUX_SOURCE" \
+      --path="./" \
+      --prune=true \
+      --interval=1m \
+      --decryption-provider=sops \
+      --decryption-secret=sops-age \
+      --export |
+      kubectl apply -f -
 
-## Production guidance
+    flux reconcile kustomization "$FLUX_KUSTOMIZATION" \
+      --namespace="$FLUX_NAMESPACE" \
+      --with-source
 
-* Commit encrypted files, public recipients, and SOPS policy only.
-* Keep private identities in a secret manager or protected local storage.
-* Separate recipients by environment, cluster, and trust boundary.
-* Prevent plaintext from entering logs, CI artifacts, editor swap, and Git
-  history.
-* After compromise, remove the recipient, run `updatekeys`, rotate the SOPS
-  data key, and rotate the underlying credential.
-* Use Kubernetes RBAC and encryption at rest. SOPS does not protect runtime
-  copies.
+    kubectl -n default get secret example-application
+    ```
+
+Flux decrypts source manifests before the Kustomize build. The bootstrap
+identity cannot depend on a manifest encrypted with itself.
+
+## Production rules
+
+* commit encrypted files, public recipients, and policy only
+* separate recipients by environment, cluster, and trust boundary
+* keep private identities in a secret manager or protected local storage
+* prevent plaintext from entering arguments, logs, CI artifacts, editor swap,
+  and Git history
+* use Kubernetes RBAC and encryption at rest; SOPS does not protect runtime
+  copies
