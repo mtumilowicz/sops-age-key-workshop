@@ -434,20 +434,21 @@ sops:
     sops:
       age:
         - recipient: age1-prod-invoicing-flux...
-          enc: <data key encrypted for production Flux>
+          enc: <data key encrypted for the invoicing Flux age recipient>
         - recipient: age1-prod-invoicing-recovery...
           enc: <same data key encrypted for recovery>
     ```
 
 * production recipient design
-  * production Flux identity
-    * private identity is stored in the production cluster
-    * provides automatic decryption during reconciliation
-    * is scoped to the production invoicing workload or tenant
+  * Flux age decryption identity
+    * is a normal age private identity beginning with `AGE-SECRET-KEY-...`
+    * matches the public recipient `age1-prod-invoicing-flux...`
+    * is not a Flux user, Kubernetes ServiceAccount, or Git identity
+    * allows Flux to decrypt SOPS files during reconciliation
   * recovery identity
     * private identity is stored offline or in a separate secret manager
     * is not stored in Git or in the same production cluster
-    * recovers secrets if the Flux identity is lost
+    * recovers secrets if the Flux age decryption identity is lost
   * recipients use OR semantics
     * either private identity can decrypt the complete file
     * additional recipients improve recoverability but increase exposure
@@ -462,10 +463,43 @@ sops:
       `age1-prod-invoicing-flux...`
     * is referenced by the Flux `Kustomization`
     * allows age to recover the SOPS data key
+    * Kubernetes Secret example
+
+      ```yaml
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: sops-age
+        namespace: invoicing
+      stringData:
+        identity.agekey: AGE-SECRET-KEY-...
+      ```
+
+    * Flux `Kustomization` reference
+
+      ```yaml
+      metadata:
+        name: invoicing
+        namespace: invoicing
+      spec:
+        decryption:
+          provider: sops
+          secretRef:
+            name: sops-age
+      ```
+
+    * physical storage and use
+      * the Kubernetes API server persists the Secret in the cluster's etcd
+        database
+      * Secret values are base64 encoded and are unencrypted in etcd by default
+      * production clusters should enable encryption at rest
+      * RBAC should restrict access to the `sops-age` Secret
+      * kustomize-controller reads the identity into process memory during
+        reconciliation
 * deployment flow
   * Flux fetches the private Git repository using `git-auth`
-  * age uses the production Flux identity in `sops-age` to recover the SOPS data
-    key
+  * age uses the Flux age decryption identity in `sops-age` to recover the SOPS
+    data key
   * SOPS uses the data key to verify the MAC and decrypt `STRIPE_API_KEY`
   * Flux creates the `invoicing-stripe` Kubernetes Secret in the `invoicing`
     namespace
