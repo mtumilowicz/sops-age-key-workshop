@@ -395,7 +395,56 @@ sops:
   * without an authorized identity, an attacker cannot create a valid encrypted
     copy of the existing data key
 
+## Flux with SOPS and age
+
+* repository author
+  * adds the Flux public age recipient (`age1...`) to the SOPS policy
+  * uses SOPS to encrypt the Kubernetes Secret before committing it
+  * commits ciphertext, public recipients, and SOPS metadata
+  * does not commit the Flux private age identity
+* cluster operator
+  * provides Flux with the private age identity matching the public recipient
+  * delivers it independently of the encrypted Git repository
+  * normally stores it in a Kubernetes Secret in the same namespace as the Flux
+    `Kustomization`
+  * stores it under a Kubernetes Secret entry name ending in `.agekey`, such as
+    `identity.agekey`
+* Flux `Kustomization`
+  * enables SOPS decryption
+  * identifies the Kubernetes Secret containing the private age identity
+
+    ```yaml
+    spec:
+      decryption:
+        provider: sops
+        secretRef:
+          name: sops-age
+    ```
+
+* reconciliation flow
+  1. Flux fetches the repository artifact containing the encrypted manifest.
+  2. Flux reads the recipients and encrypted data-key copies from the file's
+     `sops.age` metadata.
+  3. age uses the matching private identity from `sops-age` to decrypt the data
+     key.
+  4. SOPS uses the data key to verify the MAC and decrypt the selected YAML
+     values.
+  5. Flux runs the Kustomize build, validates the result, and applies the
+     plaintext Kubernetes objects.
+* `.sops.yaml`
+  * is used by authors when encrypting files and changing recipients
+  * is not required by Flux to decrypt an existing file
+  * the existing file already contains its recipients and encryption settings
+    in `sops` metadata
+* security boundary
+  * the private identity cannot be bootstrapped only from a manifest encrypted
+    with that identity
+  * an operator or secret manager must provide it out of band
+  * plaintext exists in the Flux controller and Kubernetes after decryption
+
 ## workshop plan
+
+### Local secret lifecycle
 
 Requirements: Bash, `sops`, and an editor for `sops edit`.
 
@@ -486,7 +535,7 @@ age-keygen --version
 
 Avoid `sops decrypt --in-place`; it writes plaintext to disk.
 
-## Recipient lifecycle
+### Recipient lifecycle
 
 * generate an identity
   * requires `age-keygen`
@@ -531,71 +580,3 @@ Avoid `sops decrypt --in-place`; it writes plaintext to disk.
   * rotation does not retract copied plaintext
   * after compromise, also rotate the underlying password, token, or
     certificate
-
-## Flux decryption
-
-Requirements:
-
-* `kubectl`
-* Flux controllers and CLI
-* an authenticated, pushable Git remote
-* an existing Flux `GitRepository` source for this repository
-
-Production Git contains the SOPS policy, public recipients, and encrypted
-manifest. It omits the workshop plaintext and private identity fixtures.
-
-* select only the encrypted manifest in a root `kustomization.yaml`
-
-    ```yaml
-    apiVersion: kustomize.config.k8s.io/v1beta1
-    kind: Kustomization
-    resources:
-      - k8s-secret.enc.yaml
-    ```
-
-* commit and push the source files
-
-    ```bash
-    git add .sops.yaml k8s-secret.enc.yaml kustomization.yaml
-    git commit -m "add SOPS-encrypted application secret"
-    git push
-    ```
-
-* inject the age identity independently
-  * the committed source below is suitable only for this lab
-  * production identities come from an operator or secret manager
-
-    ```bash
-    export FLUX_NAMESPACE=flux-system
-    export FLUX_SOURCE=sops-age-workshop
-    export FLUX_KUSTOMIZATION=sops-age-workshop
-
-    kubectl -n "$FLUX_NAMESPACE" create secret generic sops-age \
-      --from-file=identity.agekey=age-private-key/flux.agekey \
-      --dry-run=client -o yaml |
-      kubectl apply -f -
-    ```
-
-* create or update the Flux `Kustomization`
-
-    ```bash
-    flux create kustomization "$FLUX_KUSTOMIZATION" \
-      --namespace="$FLUX_NAMESPACE" \
-      --source="GitRepository/$FLUX_SOURCE" \
-      --path="./" \
-      --prune=true \
-      --interval=1m \
-      --decryption-provider=sops \
-      --decryption-secret=sops-age \
-      --export |
-      kubectl apply -f -
-
-    flux reconcile kustomization "$FLUX_KUSTOMIZATION" \
-      --namespace="$FLUX_NAMESPACE" \
-      --with-source
-
-    kubectl -n default get secret example-application
-    ```
-
-Flux decrypts source manifests before the Kustomize build. The bootstrap
-identity cannot depend on a manifest encrypted with itself.
