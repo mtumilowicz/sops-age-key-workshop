@@ -87,8 +87,8 @@
       * matches one recipient
       * used to decrypt the SOPS data key
       * must normally remain outside Git
-* how SOPS and age work together
-  * SOPS generates one random symmetric data key
+* encryption
+  * when SOPS encrypts a new document, it generates one random symmetric data key
     * symmetric means the same key encrypts and decrypts data
   * SOPS uses the data key to encrypt the selected YAML values
     * SOPS reads `encrypted_regex` from the matching rule in `.sops.yaml`
@@ -115,38 +115,39 @@
   * age uses the private identity to decrypt the data key
   * SOPS uses the decrypted data key to decrypt the YAML values
 
-Example before encryption:
+* example 
+    * before encryption
 
-```yaml
-metadata:
-  name: example-application # not selected
-stringData:                 # matches encrypted_regex
-  username: demo-user       # selected
-  password: demo-value      # selected
-```
+      ```yaml
+      metadata:
+        name: example-application # not selected
+      stringData:                 # matches encrypted_regex
+        username: demo-user       # selected
+        password: demo-value      # selected
+      ```
 
-Abbreviated result from `k8s-secret.enc.yaml`:
+    * after encryption (partial snippet)
 
-```yaml
-metadata:
-  name: example-application
-stringData:
-  password: ENC[AES256_GCM,data:XtOo6CeeOqr1gw==,...]
-sops:
-  age:
-    - recipient: age1deeq9...
-      enc: |
-        -----BEGIN AGE ENCRYPTED FILE-----
-        YWdlLWVuY3J5cHRpb24ub3JnL3Yx...
-        -----END AGE ENCRYPTED FILE-----
-    - recipient: age1an9w...
-      enc: |
-        -----BEGIN AGE ENCRYPTED FILE-----
-        YWdlLWVuY3J5cHRpb24ub3JnL3Yx...
-        -----END AGE ENCRYPTED FILE-----
-  encrypted_regex: ^(data|stringData)
-  mac: ENC[AES256_GCM,data:W6JZXuZzS1vrtqBA,...]
-```
+      ```yaml
+      metadata:
+        name: example-application
+      stringData:
+        password: ENC[AES256_GCM,data:XtOo6CeeOqr1gw==,...]
+      sops:
+        age:
+          - recipient: age1deeq9...
+            enc: |
+              -----BEGIN AGE ENCRYPTED FILE-----
+              YWdlLWVuY3J5cHRpb24ub3JnL3Yx...
+              -----END AGE ENCRYPTED FILE-----
+          - recipient: age1an9w...
+            enc: |
+              -----BEGIN AGE ENCRYPTED FILE-----
+              YWdlLWVuY3J5cHRpb24ub3JnL3Yx...
+              -----END AGE ENCRYPTED FILE-----
+        encrypted_regex: ^(data|stringData)
+        mac: ENC[AES256_GCM,data:W6JZXuZzS1vrtqBA,...]
+      ```
 
 * `sops.age[].enc`
   * each `enc` block is one encrypted copy of the same data key
