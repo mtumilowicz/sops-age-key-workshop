@@ -20,11 +20,61 @@
 ## SOPS and age
 
 * SOPS
-  * encrypts selected values while preserving the document structure
-  * generates a random 256-bit data key
-  * encrypts selected leaves with AES-256-GCM
-  * stores ciphertext, wrapped data keys, an encrypted MAC, and metadata in the
-    source document
+  * supports structured YAML, JSON, ENV, and INI files
+    * YAML and JSON represent nested data
+    * ENV files contain `KEY=value` entries
+    * INI files contain `key=value` entries, optionally grouped into sections
+  * determines the input format from the file extension
+    * `--input-type` can set the format explicitly
+  * treats structured files as trees
+    * keeps keys readable
+    * encrypts leaf values by default
+    * selection rules such as `encrypted_regex` can restrict which values are
+      encrypted
+    * example:
+
+      ```yaml
+      encrypted_regex: '^(data|stringData)$'
+      ```
+
+      * encrypts leaf values below keys named `data` or `stringData`
+    * stores the following items in the source document
+      * ciphertext
+        * protects each selected value
+      * wrapped data keys
+        * let an authorized identity decrypt the data key
+      * encrypted MAC
+        * protects the complete document
+        * detects added, removed, or changed values
+      * metadata
+        * records the SOPS version, modification time, and value-selection
+          settings
+        * abbreviated example:
+
+          ```yaml
+          sops:
+            encrypted_regex: ^(data|stringData)$
+            lastmodified: "2026-07-30T18:26:29Z"
+            version: 3.13.3
+          ```
+
+        * the complete `sops` section also contains the wrapped data keys and
+          encrypted MAC
+  * also supports binary files
+    * treats the complete file as one value
+    * encrypts the whole file
+    * stores the encrypted value as base64 inside a JSON document
+    * does not preserve an editable structure or useful value-level Git diffs
+  * generates one random 256-bit symmetric data key for the document
+    * 256 bits means the data key is 32 bytes
+    * symmetric means the same data key encrypts and decrypts values
+    * symmetric encryption efficiently processes values of arbitrary length
+  * encrypts each selected leaf value with the data key using AES-256-GCM
+    * AES-256 is the symmetric encryption algorithm
+    * GCM produces an authentication tag for each encrypted value
+        * tag detects modification of that value or its authenticated context
+            * in particular: no separate HMAC is required for each value
+    * SOPS also uses an encrypted document MAC to protect the complete document
 * age
   * encrypts the SOPS data key for each configured recipient
   * terminology
@@ -42,14 +92,12 @@
     * symmetric means the same key encrypts and decrypts data
   * SOPS uses the data key to encrypt the selected YAML values
     * SOPS reads `encrypted_regex` from the matching rule in `.sops.yaml`
-    * this workshop uses `^(data|stringData)`
-    * SOPS therefore encrypts values below keys beginning with `data` or
-      `stringData`
-    * values below `metadata` are not selected
+        * example: `^(data|stringData)`
+            * => SOPS encrypts values below keys beginning with `data` or `stringData`
+            * in particular: values below `metadata` are not selected
   * age encrypts the data key with each recipient's public key (`age1...`)
-  * the file stores
-    * encrypted YAML values in their original fields, such as
-      `stringData.password`
+  * output file contains
+    * encrypted YAML values in their original fields
     * one encrypted copy of the data key for each recipient in a separate
       `sops.age[].enc` block, for example:
 
@@ -65,7 +113,7 @@
 * decryption
   * age needs a matching private identity (`AGE-SECRET-KEY-...`)
   * age uses the private identity to decrypt the data key
-  * SOPS uses the recovered data key to decrypt the YAML values
+  * SOPS uses the decrypted data key to decrypt the YAML values
 
 Example before encryption:
 
