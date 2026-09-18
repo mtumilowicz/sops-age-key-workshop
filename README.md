@@ -38,163 +38,128 @@
       ```
 
       * encrypts leaf values below keys named `data` or `stringData`
-    * stores the following items in the source document
-      * ciphertext
-        * protects each selected value
-      * wrapped data keys
-        * let an authorized identity decrypt the data key
-      * encrypted MAC
-        * protects the complete document
-        * detects added, removed, or changed values
-      * metadata
-        * records the SOPS version, modification time, and value-selection
-          settings
-        * abbreviated example:
-
-          ```yaml
-          sops:
-            encrypted_regex: ^(data|stringData)$
-            lastmodified: "2026-07-30T18:26:29Z"
-            version: 3.13.3
-          ```
-
-        * the complete `sops` section also contains the wrapped data keys and
-          encrypted MAC
   * also supports binary files
     * treats the complete file as one value
     * encrypts the whole file
     * stores the encrypted value as base64 inside a JSON document
     * does not preserve an editable structure or useful value-level Git diffs
-  * generates one random 256-bit symmetric data key for the document
-    * 256 bits means the data key is 32 bytes
-    * symmetric means the same data key encrypts and decrypts values
-    * symmetric encryption efficiently processes values of arbitrary length
-  * encrypts each selected leaf value with the data key using AES-256-GCM
-    * AES-256 is the symmetric encryption algorithm
-    * GCM produces an authentication tag for each encrypted value
-        * tag detects modification of that value or its authenticated context
-            * in particular: no separate HMAC is required for each value
-    * SOPS also uses an encrypted document MAC to protect the complete document
 * age
-  * encrypts the SOPS data key for each configured recipient
-  * terminology
-    * recipient
-      * public key beginning with `age1...`
-      * used to encrypt the SOPS data key
-      * may be committed and distributed
-    * identity
-      * private key beginning with `AGE-SECRET-KEY-...`
-      * matches one recipient
-      * used to decrypt the SOPS data key
-      * must normally remain outside Git
-* encryption
-  * when SOPS encrypts a new document, it generates one random symmetric data key
-    * symmetric means the same key encrypts and decrypts data
-  * SOPS uses the data key to encrypt the selected YAML values
-    * SOPS reads `encrypted_regex` from the matching rule in `.sops.yaml`
-        * example: `^(data|stringData)`
-            * => SOPS encrypts values below keys beginning with `data` or `stringData`
-            * in particular: values below `metadata` are not selected
-  * age encrypts the data key with each recipient's public key (`age1...`)
-  * output file contains
-    * encrypted YAML values in their original fields
-    * one encrypted copy of the data key for each recipient in a separate
-      `sops.age[].enc` block, for example:
+  * controls access to the SOPS data key
+  * recipient
+    * public key beginning with `age1...`
+    * encrypts the SOPS data key
+    * may be committed and distributed
+  * identity
+    * private key beginning with `AGE-SECRET-KEY-...`
+    * matches one recipient
+    * decrypts the SOPS data key
+    * must normally remain outside Git
 
-      ```yaml
-      sops:
-        age:
-          - recipient: age1deeq9...
-            enc: |
-              -----BEGIN AGE ENCRYPTED FILE-----
-              YWdlLWVuY3J5cHRpb24ub3JnL3Yx...
-              -----END AGE ENCRYPTED FILE-----
-        mac: ENC[AES256_GCM,data:W6JZXuZzS1vrtqBA,...]
-      ```
-    * `sops.age[].enc`
-      * each `enc` block is one encrypted copy of the same data key
-      * each copy is encrypted with the public key in its `recipient`
-      * can be decrypted only with the matching private identity
-      * does not contain secret values such as `username` or `password`
-      * age uses fresh random material for each encryption
-      * if the same recipient appears twice, the two `enc` blocks should still
-        differ
-      * multiple `enc` blocks have OR semantics
-      * any matching private identity can decrypt the data key
-    * `sops.mac`
-      * is an integrity check calculated from the document values
-      * is encrypted with the data key
-      * is recalculated during decryption and compared with the stored value
-      * reports a MAC mismatch when a value was changed, added, or removed
-        without valid re-encryption
-      * can be replaced with a valid new MAC by anyone who has a matching
-        private identity
+## Encryption model
+
+* data key
+  * SOPS generates one random data key when it encrypts a new document
+  * the data key is a 256-bit, or 32-byte, symmetric key
+  * the same symmetric key encrypts and decrypts values
+  * symmetric encryption efficiently processes values of arbitrary length
+* value encryption
+  * SOPS encrypts each selected leaf value with the data key using AES-256-GCM
+  * AES-256 is the symmetric encryption algorithm
+  * GCM produces an authentication tag for each encrypted value
+    * the tag detects modification of the value or its authenticated context
+    * no separate HMAC is required for each value
+* data-key access
+  * age encrypts one copy of the data key with each public recipient
+  * SOPS stores each encrypted copy in a separate `sops.age[].enc` block
+  * each block can be decrypted only with the matching private identity
+  * an `enc` block does not contain values such as `username` or `password`
+  * age uses fresh random material for each encryption
+    * two entries for the same recipient should still differ
+  * multiple `enc` blocks have OR semantics
+    * any matching private identity can decrypt the data key
 * decryption
-  * age needs a matching private identity (`AGE-SECRET-KEY-...`)
-  * age uses the private identity to decrypt the data key
-  * SOPS uses the decrypted data key to decrypt the YAML values
+  * age uses a matching private identity to decrypt one copy of the data key
+  * SOPS uses the decrypted data key to decrypt the selected values
+* encrypted document
+  * keeps encrypted values in their original fields
+  * stores the following items in the `sops` section
+    * encrypted copies of the data key
+      * give matching identities access to the data key
+    * encrypted MAC
+      * detects added, removed, or changed document values
+    * metadata
+      * records the SOPS version, modification time, and value-selection settings
+* example
+  * before encryption
 
-* example 
-    * before encryption
+    ```yaml
+    metadata:
+      name: example-application # not selected
+    stringData:                 # matches encrypted_regex
+      username: demo-user       # selected
+      password: demo-value      # selected
+    ```
 
-      ```yaml
-      metadata:
-        name: example-application # not selected
-      stringData:                 # matches encrypted_regex
-        username: demo-user       # selected
-        password: demo-value      # selected
-      ```
+  * after encryption (partial snippet)
 
-    * after encryption (partial snippet)
-
-      ```yaml
-      metadata:
-        name: example-application
-      stringData:
-        password: ENC[AES256_GCM,data:XtOo6CeeOqr1gw==,...]
-      sops:
-        age:
-          - recipient: age1deeq9...
-            enc: |
-              -----BEGIN AGE ENCRYPTED FILE-----
-              YWdlLWVuY3J5cHRpb24ub3JnL3Yx...
-              -----END AGE ENCRYPTED FILE-----
-          - recipient: age1an9w...
-            enc: |
-              -----BEGIN AGE ENCRYPTED FILE-----
-              YWdlLWVuY3J5cHRpb24ub3JnL3Yx...
-              -----END AGE ENCRYPTED FILE-----
-        encrypted_regex: ^(data|stringData)
-        mac: ENC[AES256_GCM,data:W6JZXuZzS1vrtqBA,...]
-      ```
+    ```yaml
+    metadata:
+      name: example-application
+    stringData:
+      password: ENC[AES256_GCM,data:XtOo6CeeOqr1gw==,...]
+    sops:
+      age:
+        - recipient: age1deeq9...
+          enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3Yx...
+            -----END AGE ENCRYPTED FILE-----
+        - recipient: age1an9w...
+          enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3Yx...
+            -----END AGE ENCRYPTED FILE-----
+      encrypted_regex: ^(data|stringData)$
+      lastmodified: "2026-07-30T18:26:29Z"
+      mac: ENC[AES256_GCM,data:W6JZXuZzS1vrtqBA,...]
+      version: 3.13.3
+    ```
 
 * multiple recipients
   * N-of-M access requires `key_groups` and `shamir_threshold`, for example:
-    * example
-        ```yaml
-        key_groups:
-          - age:
-              - age1-alice
-          - age:
-              - age1-flux
-          - age:
-              - age1-recovery
-        shamir_threshold: 2
-        ```
-      
-        * SOPS splits the data key into three shares in the same SOPS document
-        * shares from any two groups are required
-        * valid combinations are Alice and Flux, Alice and Recovery, or Flux and
-          Recovery
-        * the threshold counts groups, not individual identities
-        * when one group contains several identities, any one of them can recover
-          that group's share
-* integrity
-  * the encrypted MAC covers encrypted and plaintext data values by default
-  * changing plaintext such as `metadata.name` causes a MAC mismatch
+
+    ```yaml
+    key_groups:
+      - age:
+          - age1-alice
+      - age:
+          - age1-flux
+      - age:
+          - age1-recovery
+    shamir_threshold: 2
+    ```
+
+  * SOPS splits the data key into three shares in the same SOPS document
+  * shares from any two groups are required
+  * valid combinations are Alice and Flux, Alice and Recovery, or Flux and
+    Recovery
+  * the threshold counts groups, not individual identities
+  * when one group contains several identities, any one of them can recover
+    that group's share
+
+## Integrity and limits
+
+* `sops.mac`
+  * is an integrity check calculated from the document values
+  * is encrypted with the data key
+  * covers encrypted and plaintext data values by default
+  * is recalculated during decryption and compared with the stored value
+  * reports a MAC mismatch when a value was changed, added, or removed without
+    valid re-encryption
+  * can be replaced with a valid new MAC by anyone who has a matching private
+    identity
+* authorship
   * the MAC proves integrity, not authorship
-    * anyone with a matching age identity can change the file and create a new
-      valid MAC
   * signed commits or tags provide cryptographic attribution
     * verify that the Git object was signed by the holder of a trusted signing
       key
@@ -261,6 +226,17 @@
 
   * anchors are only YAML syntax
   * anchors do not create SOPS access rules by themselves
+* normal workflow
+  * production repositories normally store the encrypted file as the source of
+    truth
+  * the encrypted file is often named `*.enc.yaml`
+  * users run `sops edit FILE` and `sops decrypt FILE` on that encrypted file
+  * `sops edit FILE` decrypts the file for the editor and re-encrypts it on save
+  * `sops decrypt FILE` writes plaintext to stdout
+  * for a new file, the final encrypted path selects the creation rule
+  * for an existing file, SOPS reads the embedded `sops` section
+  * production repositories do not normally keep a plaintext copy beside the
+    encrypted file
 * embedded `sops` section
   * an encrypted file contains a `sops:` section
   * that section stores the settings that SOPS used for that file
@@ -279,7 +255,6 @@
       version: 3.13.3
     ```
 
-  * `sops decrypt` and `sops edit` read this section from the encrypted file
   * `.sops.yaml` changes affect the next encryption command
   * an existing encrypted file changes only when a SOPS command rewrites that
     encrypted file
@@ -316,254 +291,124 @@
   * without an authorized identity, an attacker cannot create a valid encrypted
     copy of the existing data key
 
-## Flux with SOPS and age
-
-* use case
-  * an invoicing backend calls the Stripe API
-  * the application requires a server-side Stripe API key
-* plaintext Kubernetes Secret
-  * the application reads the Stripe key from a Secret in its namespace
-  * example
-
-    ```yaml
-    apiVersion: v1
-    kind: Secret
-    metadata:
-      name: invoicing-stripe
-      namespace: invoicing
-    stringData:
-      STRIPE_API_KEY: rk_live_example
-    ```
-
-* encrypted Git state
-  * the Stripe key must not be committed as plaintext
-  * SOPS encrypts the value before the file enters Git
-  * the file includes production Flux and recovery public age recipients
-  * example
-
-    ```yaml
-    apiVersion: v1
-    kind: Secret
-    metadata:
-      name: invoicing-stripe
-      namespace: invoicing
-    stringData:
-      STRIPE_API_KEY: ENC[AES256_GCM,...]
-    sops:
-      age:
-        - recipient: age1-prod-invoicing-flux...
-          enc: <data key encrypted for the invoicing Flux age recipient>
-        - recipient: age1-prod-invoicing-recovery...
-          enc: <same data key encrypted for recovery>
-    ```
-
-* production recipient design
-  * Flux age decryption identity
-    * is a normal age private identity beginning with `AGE-SECRET-KEY-...`
-    * matches the public recipient `age1-prod-invoicing-flux...`
-    * is not a Flux user, Kubernetes ServiceAccount, or Git identity
-    * allows Flux to decrypt SOPS files during reconciliation
-  * recovery identity
-    * private identity is stored offline or in a separate secret manager
-    * is not stored in Git or in the same production cluster
-    * recovers secrets if the Flux age decryption identity is lost
-  * recipients use OR semantics
-    * either private identity can decrypt the complete file
-    * additional recipients improve recoverability but increase exposure
-  * do not add routine developer identities unless developers require plaintext
-    access
-* Flux credentials
-  * `git-auth`
-    * authenticates Flux to the private Git repository
-    * is referenced by the Flux `GitRepository`
-  * `sops-age`
-    * contains the private age identity matching
-      `age1-prod-invoicing-flux...`
-    * is referenced by the Flux `Kustomization`
-    * allows age to recover the SOPS data key
-    * Kubernetes Secret example
-
-      ```yaml
-      apiVersion: v1
-      kind: Secret
-      metadata:
-        name: sops-age
-        namespace: invoicing
-      stringData:
-        identity.agekey: AGE-SECRET-KEY-...
-      ```
-
-    * Flux `Kustomization` reference
-
-      ```yaml
-      metadata:
-        name: invoicing
-        namespace: invoicing
-      spec:
-        decryption:
-          provider: sops
-          secretRef:
-            name: sops-age
-      ```
-
-    * physical storage and use
-      * the Kubernetes API server persists the Secret in the cluster's etcd
-        database
-      * Secret values are base64 encoded and are unencrypted in etcd by default
-      * production clusters should enable encryption at rest
-      * RBAC should restrict access to the `sops-age` Secret
-      * kustomize-controller reads the identity into process memory during
-        reconciliation
-* deployment flow
-  * Flux fetches the private Git repository using `git-auth`
-  * age uses the Flux age decryption identity in `sops-age` to recover the SOPS
-    data key
-  * SOPS uses the data key to verify the MAC and decrypt `STRIPE_API_KEY`
-  * Flux creates the `invoicing-stripe` Kubernetes Secret in the `invoicing`
-    namespace
-  * the invoicing application reads the Stripe key from the Kubernetes Secret
-  * the application uses the key when calling Stripe
-* `HelmRelease` responsibility
-  * deploys the invoicing application
-  * does not contain the Stripe key
-  * does not decrypt SOPS
-  * the Kubernetes Secret is created before the application uses it
-
 ## workshop plan
 
 ### Local secret lifecycle
 
-Requirements: Bash, `sops`, and an editor for `sops edit`.
+* requirements
+  * Bash
+  * `sops`
+  * an editor for `sops edit`
 
-```bash
-brew install sops age
-sops --version
-age-keygen --version
-```
+1. install the tools
 
-* encrypt the dummy manifest
-  * `scripts/encrypt.sh` reads `k8s-secret.yaml`
-  * it overwrites `k8s-secret.enc.yaml`
-  * its shell redirection is not atomic; an encryption failure can leave the
-    output empty
-  * always verify the result
+   ```bash
+   brew install sops age
+   sops --version
+   age-keygen --version
+   ```
 
-    ```bash
-    ./scripts/encrypt.sh
-    sops filestatus k8s-secret.enc.yaml
-    ./scripts/decrypt.sh
-    git diff -- k8s-secret.enc.yaml
-    ```
+2. inspect the existing encrypted manifest
+   * the workshop starts with `k8s-secret.enc.yaml`
+   * `k8s-secret.yaml` is only a dummy plaintext comparison file
+   * `sops filestatus` reads the embedded `sops` section to detect whether the
+     file is encrypted
 
-* decrypt with the default Flux fixture identity
+   ```bash
+   sops filestatus k8s-secret.enc.yaml
+   ```
 
-    ```bash
-    ./scripts/decrypt.sh
-    ```
+3. decrypt with the Flux fixture identity
+   * decryption prints plaintext to stdout
+   * do not use `sops decrypt --in-place`; it writes plaintext to disk
 
-* decrypt with the developer fixture identity
+   ```bash
+   SOPS_AGE_KEY_FILE=age-private-key/flux.agekey \
+     sops decrypt k8s-secret.enc.yaml
+   ```
 
-    ```bash
-    ./scripts/decrypt.sh age-private-key/mtumilowicz.agekey
-    ```
+4. decrypt with the developer fixture identity
 
-* use SOPS directly
-  * the workshop sets `SOPS_AGE_KEY_FILE` explicitly
+   ```bash
+   SOPS_AGE_KEY_FILE=age-private-key/mtumilowicz.agekey \
+     sops decrypt k8s-secret.enc.yaml
+   ```
 
-    ```bash
-    export SOPS_AGE_KEY_FILE="$PWD/age-private-key/flux.agekey"
-    sops decrypt k8s-secret.enc.yaml
-    ```
+5. edit through SOPS editor
+   * SOPS decrypts the document for the editor
+   * saving re-encrypts protected values and recalculates the MAC
 
-* edit through SOPS
-  * SOPS decrypts the document for the editor
-  * saving re-encrypts protected values and recalculates the MAC
+   ```bash
+   SOPS_AGE_KEY_FILE=age-private-key/flux.agekey \
+     sops edit k8s-secret.enc.yaml
+   ```
 
-    ```bash
-    sops edit k8s-secret.enc.yaml
-    ```
+6. detect tampering
+   * the commands modify a disposable copy, not the repository file
 
-* update one encrypted value
-  * pipe real values from a secure source
-  * do not place them in arguments or shell history
+   ```bash
+   cp k8s-secret.enc.yaml /tmp/tampered-secret.enc.yaml
+   sed -i.bak \
+     's/name: example-application/name: tampered-application/' \
+     /tmp/tampered-secret.enc.yaml
+   SOPS_AGE_KEY_FILE=age-private-key/flux.agekey \
+     sops decrypt /tmp/tampered-secret.enc.yaml
+   ```
 
-    ```bash
-    printf '%s' '"rotated-demo-value"' |
-      sops set --value-stdin k8s-secret.enc.yaml \
-      '["stringData"]["password"]'
-
-    sops decrypt --extract \
-      '["stringData"]["password"]' \
-      k8s-secret.enc.yaml
-    ```
-
-* detect tampering
-  * the commands modify a disposable copy, not the repository file
-
-    ```bash
-    cp k8s-secret.enc.yaml /tmp/tampered-secret.enc.yaml
-    sed -i.bak \
-      's/name: example-application/name: tampered-application/' \
-      /tmp/tampered-secret.enc.yaml
-    sops decrypt /tmp/tampered-secret.enc.yaml
-    ```
-
-  * `cp` creates `/tmp/tampered-secret.enc.yaml`; the original encrypted file
-    remains unchanged
-  * `sed -i.bak` modifies that copy without using SOPS
-    * replaces `metadata.name: example-application` with
-      `metadata.name: tampered-application`
-    * creates the backup `/tmp/tampered-secret.enc.yaml.bak`
-  * `sops decrypt` recalculates the MAC from the modified document values
-  * the changed plaintext `metadata.name` does not match the stored MAC
-  * expected result: `MAC mismatch`
-  * discard the copy and its `.bak` backup
-  * never use `--ignore-mac` as a repair mechanism
-
-Avoid `sops decrypt --in-place`; it writes plaintext to disk.
+   * `cp` creates `/tmp/tampered-secret.enc.yaml`; the original encrypted file
+     remains unchanged
+   * `sed -i.bak` modifies that copy without using SOPS
+     * replaces `metadata.name: example-application` with
+       `metadata.name: tampered-application`
+     * creates the backup `/tmp/tampered-secret.enc.yaml.bak`
+   * `sops decrypt` recalculates the MAC from the modified document values
+   * the changed plaintext `metadata.name` does not match the stored MAC
+   * expected result: `MAC mismatch`
+   * discard the copy and its `.bak` backup
+   * never use `--ignore-mac` as a repair mechanism
 
 ### Recipient lifecycle
 
-* generate an identity
-  * requires `age-keygen`
-  * redirect stdout to protected storage because it contains the private
-    identity
-  * the public recipient is printed to stderr
+1. generate an identity
+   * requires `age-keygen`
+   * redirect stdout to protected storage because it contains the private
+     identity
+   * the public recipient is printed to stderr
 
-    ```bash
-    ./scripts/generate-age-key.sh > /protected/path/developer.agekey
-    ```
+   ```bash
+   age-keygen > /protected/path/developer.agekey
+   ```
 
-  * add only the resulting `age1...` recipient to `.sops.yaml`
-  * run `updatekeys` with an existing identity
-* remove an identity
-  * perform these commands only on a disposable branch
-  * remove `*mtumilowicz_age_key` from `creation_rules[0].age`
-  * synchronize the recipient wrappers
+   * add only the resulting `age1...` recipient to `.sops.yaml`
+   * run `updatekeys` with an existing identity
 
-    ```bash
-    SOPS_AGE_KEY_FILE=age-private-key/flux.agekey \
-      sops updatekeys --yes k8s-secret.enc.yaml
-    ```
+2. remove an identity
+   * perform these commands only on a disposable branch
+   * remove `*mtumilowicz_age_key` from `creation_rules[0].age`
+   * synchronize the recipient wrappers
 
-  * verify access
+   ```bash
+   SOPS_AGE_KEY_FILE=age-private-key/flux.agekey \
+     sops updatekeys --yes k8s-secret.enc.yaml
+   ```
 
-    ```bash
-    ./scripts/decrypt.sh age-private-key/mtumilowicz.agekey
-    ./scripts/decrypt.sh age-private-key/flux.agekey
-    ```
+   * verify access
 
-  * the removed identity must fail
-  * the remaining identity must succeed
-  * replace the data key after access removal
+   ```bash
+   SOPS_AGE_KEY_FILE=age-private-key/mtumilowicz.agekey \
+     sops decrypt k8s-secret.enc.yaml
+   SOPS_AGE_KEY_FILE=age-private-key/flux.agekey \
+     sops decrypt k8s-secret.enc.yaml
+   ```
 
-    ```bash
-    SOPS_AGE_KEY_FILE=age-private-key/flux.agekey \
-      sops rotate --in-place k8s-secret.enc.yaml
-    ```
+   * the removed identity must fail
+   * the remaining identity must succeed
 
-* revocation limits
-  * recipient removal does not erase old Git revisions
-  * rotation does not retract copied plaintext
-  * after compromise, also rotate the underlying password, token, or
-    certificate
+3. rotate the data key
+   * `sops rotate --in-place` generates a new random symmetric data key
+   * SOPS re-encrypts the selected values with the new data key
+
+   ```bash
+   SOPS_AGE_KEY_FILE=age-private-key/flux.agekey \
+     sops rotate --in-place k8s-secret.enc.yaml
+   ```
