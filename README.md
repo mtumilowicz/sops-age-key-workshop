@@ -109,7 +109,26 @@
               -----BEGIN AGE ENCRYPTED FILE-----
               YWdlLWVuY3J5cHRpb24ub3JnL3Yx...
               -----END AGE ENCRYPTED FILE-----
+        mac: ENC[AES256_GCM,data:W6JZXuZzS1vrtqBA,...]
       ```
+    * `sops.age[].enc`
+      * each `enc` block is one encrypted copy of the same data key
+      * each copy is encrypted with the public key in its `recipient`
+      * can be decrypted only with the matching private identity
+      * does not contain secret values such as `username` or `password`
+      * age uses fresh random material for each encryption
+      * if the same recipient appears twice, the two `enc` blocks should still
+        differ
+      * multiple `enc` blocks have OR semantics
+      * any matching private identity can decrypt the data key
+    * `sops.mac`
+      * is an integrity check calculated from the document values
+      * is encrypted with the data key
+      * is recalculated during decryption and compared with the stored value
+      * reports a MAC mismatch when a value was changed, added, or removed
+        without valid re-encryption
+      * can be replaced with a valid new MAC by anyone who has a matching
+        private identity
 * decryption
   * age needs a matching private identity (`AGE-SECRET-KEY-...`)
   * age uses the private identity to decrypt the data key
@@ -149,32 +168,7 @@
         mac: ENC[AES256_GCM,data:W6JZXuZzS1vrtqBA,...]
       ```
 
-* `sops.age[].enc`
-  * each `enc` block is one encrypted copy of the same data key
-  * each copy is encrypted with the public key in its `recipient`
-  * can be decrypted only with the matching private identity
-  * does not contain the YAML values
-  * the copies differ because they use different recipients and encryption
-    randomness
-* `sops.mac`
-  * is an integrity check calculated from the document values
-  * is encrypted with the data key
-  * is recalculated during decryption and compared with the stored value
-  * reports a MAC mismatch when a value was changed, added, or removed without
-    valid re-encryption
-  * can be replaced with a valid new MAC by anyone who has a matching private
-    identity
 * multiple recipients
-  * recipients in one `age` list have OR semantics
-    * example: two-recipient list is therefore 1-of-2 access
-        ```yaml
-        age:
-          - age1-alice
-          - age1-flux
-        ```
-        * Alice can decrypt without Flux
-        * Flux can decrypt without Alice
-  * any matching identity can decrypt the complete document
   * N-of-M access requires `key_groups` and `shamir_threshold`, for example:
     * example
         ```yaml
@@ -188,7 +182,7 @@
         shamir_threshold: 2
         ```
       
-        * SOPS splits the data key into three shares
+        * SOPS splits the data key into three shares in the same SOPS document
         * shares from any two groups are required
         * valid combinations are Alice and Flux, Alice and Recovery, or Flux and
           Recovery
@@ -219,15 +213,12 @@
   * it defines rules for creating and updating SOPS-encrypted files
   * it contains public recipients and selection rules
   * it must not contain private identities or plaintext secrets
-* location
-  * this repository stores the file at `./.sops.yaml`
 * discovery
   * SOPS starts searching in the current working directory
   * it continues through each parent directory
   * it uses the first `.sops.yaml` found
   * it does not start the search from the encrypted file's directory
   * `--config PATH` selects a configuration file explicitly
-  * the workshop scripts that run SOPS change to the repository root first
 * purpose
   * `path_regex` selects files
   * `encrypted_regex` selects YAML fields
@@ -279,7 +270,7 @@ creation_rules:
   * are evaluated in order; the first match wins
     * each rule defines both which file paths it matches and which public
       recipients receive encrypted copies of the file's data key
-    * example: a specific production rule followed by a general fallback rule
+    * example:
 
       ```yaml
       creation_rules:
@@ -424,14 +415,8 @@ sops:
   * to apply the new field selection to an existing file
     * decrypt `k8s-secret.enc.yaml` to plaintext with an authorized identity
     * encrypt that plaintext again using the target filename
-    * SOPS reads the changed `.sops.yaml` rule during this new encryption
-    * the new encrypted file records the new setting:
-
-      ```yaml
-      sops:
-        encrypted_regex: '^stringData$'
-      ```
-
+        * SOPS reads the changed `.sops.yaml` rule during this new encryption
+        * the new encrypted file records the new setting:
     * protect and discard any temporary plaintext
 
 ### Recipient-change security
